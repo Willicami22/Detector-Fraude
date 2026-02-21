@@ -5,7 +5,7 @@ object DetectorFraude {
   val mapaPerfiles: Map[String, PerfilCliente] = Dataset.perfiles.map(x => (x.clienteId, x)).toMap
 
   def validarTransaccion(t: Transaccion): Either[String, Transaccion] = {
-    if (t.monto > 0 || t.clienteId.nonEmpty) Right(t)
+    if (t.monto > 0 && t.clienteId.nonEmpty) Right(t)
     else if (t.monto <= 0) Left("Monto invalido")
     else Left("Cliente invalido")
   }
@@ -47,7 +47,7 @@ object DetectorFraude {
       e match {
         case _: MontoAtipico => acc + 40
         case _: UbicacionImposible => acc + 50
-        case _: RafagaTransacciones => acc + 30
+        case _: RafagaTransacciones => acc + 60
         case _: VelocidadExcesiva => acc + 25
         case _ => acc
       }
@@ -86,46 +86,46 @@ object DetectorFraude {
 
   def procesarTodas(transacciones: List[Transaccion], historico: List[Transaccion]): List[ResultadoAnalisis] = {
     @scala.annotation.tailrec
-    def procesarRec(restantes: List[Transaccion], acumulador: List[ResultadoAnalisis]): List[ResultadoAnalisis] = {
+    def procesarRec(restantes: List[Transaccion], procesadas: List[Transaccion], acumulador: List[ResultadoAnalisis]): List[ResultadoAnalisis] = {
       restantes match {
         case Nil => acumulador
         case t :: tail =>
-          analizarTransaccion(t, historico) match {
-            case Right(resultado) => procesarRec(tail, acumulador :+ resultado)
+          analizarTransaccion(t, procesadas) match {
+            case Right(resultado) => procesarRec(tail, procesadas :+ t, acumulador :+ resultado)
             case Left(error) =>
               println(s"Error procesando transacción ${t.id}: $error")
-              procesarRec(tail, acumulador)
+              procesarRec(tail, procesadas :+ t, acumulador)
           }
       }
     }
-    
-    procesarRec(transacciones, List())
+
+    procesarRec(transacciones, List(), List())
   }
 
   def generarReporte(clienteId: String, resultados: List[ResultadoAnalisis]): ReporteCliente = {
     val resultadosCliente = resultados.filter(_.clienteId == clienteId)
     val totalTransacciones = resultadosCliente.length
     val transaccionesSospechosas = resultadosCliente.count(r => r.nivelRiesgo == traits.Medio || r.nivelRiesgo == traits.Alto)
-    
+
     val scorePromedio = if (totalTransacciones > 0) {
       resultadosCliente.foldLeft(0.0)((acc, r) => acc + r.scoreRiesgo) / totalTransacciones
     } else 0.0
-    
+
     val tendencia = if (totalTransacciones > 1) {
+      val ordenados = resultadosCliente.sortBy(_.transaccionId)
       val mitad = totalTransacciones / 2
-      val primeraHalf = resultadosCliente.slice(0, mitad)
-      val segundaHalf = resultadosCliente.slice(mitad, totalTransacciones)
-      
-      val scorePromedioFirstHalf = primeraHalf.foldLeft(0.0)((acc, r) => acc + r.scoreRiesgo) / primeraHalf.length
-      val scorePromedioSecondHalf = segundaHalf.foldLeft(0.0)((acc, r) => acc + r.scoreRiesgo) / segundaHalf.length
-      
-      if (scorePromedioSecondHalf > scorePromedioFirstHalf * 1.2) "Tendencia al alza"
-      else if (scorePromedioSecondHalf < scorePromedioFirstHalf * 0.8) "Tendencia a la baja"
+      val primeraHalf = ordenados.slice(0, mitad)
+      val segundaHalf = ordenados.slice(mitad, totalTransacciones)
+
+      val scoreAcumuladoFirstHalf = primeraHalf.map(_.scoreRiesgo).sum
+      val scoreAcumuladoSecondHalf = segundaHalf.map(_.scoreRiesgo).sum
+      if (scoreAcumuladoSecondHalf > scoreAcumuladoFirstHalf) "Tendencia al alza"
+      else if (scoreAcumuladoSecondHalf < scoreAcumuladoFirstHalf && scoreAcumuladoFirstHalf > 0) "Tendencia a la baja"
       else "Tendencia estable"
     } else if (scorePromedio < 30) "Bajo riesgo"
     else if (scorePromedio < 70) "Riesgo moderado"
     else "Alto riesgo"
-    
+
     ReporteCliente(
       clienteId = clienteId,
       totalTransacciones = totalTransacciones,
