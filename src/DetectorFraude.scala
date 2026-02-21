@@ -1,5 +1,5 @@
 import domain.{PerfilCliente, Transaccion}
-import traits.{EventoFraude, MontoAtipico, UbicacionImposible, RafagaTransacciones}
+import traits.{EventoFraude, MontoAtipico, UbicacionImposible, RafagaTransacciones, VelocidadExcesiva}
 
 object DetectorFraude {
   val mapaPerfiles: Map[String, PerfilCliente] = Dataset.perfiles.map(x => (x.clienteId, x)).toMap
@@ -35,11 +35,22 @@ object DetectorFraude {
     val todasTrans = (clienteTrans :+ t).sortBy(_.timeStamp)
     val ventanas = todasTrans.sliding(5).toList
 
-    
+
         ventanas.collectFirst {
           case ventana if ventana.size == 5 && (ventana.last.timeStamp - ventana.head.timeStamp) <= 5 =>
             RafagaTransacciones(5, ventana.last.timeStamp - ventana.head.timeStamp)
         }
+  }
+
+  def calcularScore(eventos: List[EventoFraude]): Double = {
+    eventos.foldLeft(0)((acc, e) => {
+      e match{
+        case MontoAtipico => acc + 40
+        case UbicacionImposible => acc + 50
+        case RafagaTransacciones => acc +30
+        case VelocidadExcesiva => acc + 25
+      }
+    })
   }
 
 }
