@@ -1,4 +1,4 @@
-import domain.{PerfilCliente, Transaccion}
+import domain.{PerfilCliente, Transaccion, ResultadoAnalisis}
 import traits.{EventoFraude, MontoAtipico, UbicacionImposible, RafagaTransacciones, VelocidadExcesiva}
 
 object DetectorFraude {
@@ -43,14 +43,44 @@ object DetectorFraude {
   }
 
   def calcularScore(eventos: List[EventoFraude]): Double = {
-    eventos.foldLeft(0)((acc, e) => {
-      e match{
-        case MontoAtipico => acc + 40
-        case UbicacionImposible => acc + 50
-        case RafagaTransacciones => acc +30
-        case VelocidadExcesiva => acc + 25
+    eventos.foldLeft(0.0)((acc, e) => {
+      e match {
+        case _: MontoAtipico => acc + 40
+        case _: UbicacionImposible => acc + 50
+        case _: RafagaTransacciones => acc + 30
+        case _: VelocidadExcesiva => acc + 25
+        case _ => acc
       }
     })
   }
 
+  def analizarTransaccion(t: Transaccion, historico: List[Transaccion]): Either[String, ResultadoAnalisis] = {
+    for {
+      transaccionValida <- validarTransaccion(t)
+      perfil <- mapaPerfiles.get(transaccionValida.clienteId).toRight(s"Perfil no encontrado para cliente ${transaccionValida.clienteId}")
+      eventoMonto = detectarMontoAtipico(transaccionValida, perfil)
+      eventoUbicacion = detectarUbicacionImposible(transaccionValida, historico)
+      eventoRafaga = detectarRafaga(transaccionValida, historico)
+      eventos = List(eventoMonto, eventoUbicacion, eventoRafaga).flatten
+      scoreRiesgo = calcularScore(eventos)
+      nivelRiesgo = scoreRiesgo match {
+        case s if s < 30 => traits.Bajo
+        case s if s < 70 => traits.Medio
+        case _ => traits.Alto
+      }
+      recomendacion = nivelRiesgo match {
+        case traits.Bajo => "Transacción aprobada"
+        case traits.Medio => "Requiere verificación adicional"
+        case traits.Alto => "Transacción rechazada"
+      }
+      resultado = ResultadoAnalisis(
+        transaccionId = transaccionValida.id,
+        clienteId = transaccionValida.clienteId,
+        nivelRiesgo = nivelRiesgo,
+        eventos = eventos,
+        scoreRiesgo = scoreRiesgo,
+        recomendacion = recomendacion
+      )
+    } yield resultado
+  }
 }
